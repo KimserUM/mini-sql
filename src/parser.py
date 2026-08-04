@@ -18,7 +18,7 @@ AST用Python dataclass表示，结构清晰一点。
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from src.tokenizer import Tokenizer, Token, TokenType
 
 
@@ -82,7 +82,14 @@ class DeleteStmt:
     table: str
     where: Optional[Expression] = None
 
-Statment = SelectStmt | InsertStmt | CreateTableStmt | DeleteStmt
+@dataclass
+class UpdateStmt:
+    """UPDATE语句"""
+    table: str
+    assignments: Dict[str, str]   # col -> new_value
+    where: Optional[Expression] = None
+
+Statment = SelectStmt | InsertStmt | CreateTableStmt | DeleteStmt | UpdateStmt
 
 
 # ── Parser ─────────────────────────────────
@@ -154,6 +161,8 @@ class Parser:
             return self._parse_create_table()
         elif tok.type == TokenType.DELETE:
             return self._parse_delete()
+        elif tok.type == TokenType.UPDATE:
+            return self._parse_update()
         else:
             raise ParseError(f"不支持的语句, 以{tok.type.name}开头", tok)
 
@@ -317,6 +326,31 @@ class Parser:
         self._match(TokenType.SEMICOLON)
 
         return DeleteStmt(table=table, where=where)
+
+    def _parse_update(self) -> UpdateStmt:
+        """UPDATE table SET col=val, col=val... [WHERE cond]"""
+        self._expect(TokenType.UPDATE)
+        table = self._expect(TokenType.IDENTIFIER).value
+        self._expect(TokenType.SET)
+
+        # col = value pairs
+        assignments: Dict[str, str] = {}
+        col = self._expect(TokenType.IDENTIFIER).value
+        self._expect(TokenType.EQUALS)
+        assignments[col] = self._parse_value()
+
+        while self._match(TokenType.COMMA):
+            col = self._expect(TokenType.IDENTIFIER).value
+            self._expect(TokenType.EQUALS)
+            assignments[col] = self._parse_value()
+
+        where = None
+        if self._match(TokenType.WHERE):
+            where = self._parse_expression()
+
+        self._match(TokenType.SEMICOLON)
+
+        return UpdateStmt(table=table, assignments=assignments, where=where)
 
     # ── 表达式解析 ──────────────────────────
 

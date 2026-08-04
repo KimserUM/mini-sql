@@ -27,7 +27,7 @@ engine.py — SQL执行引擎
 
 from typing import Dict, List, Any, Optional
 from src.parser import (
-    Statment, SelectStmt, InsertStmt, CreateTableStmt, DeleteStmt,
+    Statment, SelectStmt, InsertStmt, CreateTableStmt, DeleteStmt, UpdateStmt,
     Expression, BinaryOp, ColumnRef, Literal, ColumnDef,
 )
 from src.tokenizer import Tokenizer
@@ -71,6 +71,8 @@ class Engine:
             return self._exec_create_table(stmt)
         elif isinstance(stmt, DeleteStmt):
             return self._exec_delete(stmt)
+        elif isinstance(stmt, UpdateStmt):
+            return self._exec_update(stmt)
         else:
             raise EngineError(f"不支持的语句类型: {type(stmt)}")
 
@@ -165,12 +167,40 @@ class Engine:
         deleted = before - len(table["rows"])
         return f"DELETE {deleted} 行"
 
+    def _exec_update(self, stmt: UpdateStmt) -> str:
+        table = self._get_table(stmt.table)
+        rows = table["rows"]
+
+        if stmt.where is None:
+            # UPDATE without WHERE: apply to all rows
+            targets = rows
+        else:
+            targets = [r for r in rows if self._eval_expr(stmt.where, r)]
+
+        for row in targets:
+            for col, val in stmt.assignments.items():
+                col_def = self._find_column(table, col)
+                if col_def is None:
+                    raise EngineError(
+                        f"Table '{stmt.table}' has no column '{col}'"
+                    )
+                row[col] = self._convert_value(val, col_def.col_type)
+
+        return f"UPDATE {len(targets)} 行"
+
     # ── 表达式求值 ──────────────────────────
 
     def _eval_expr(self, expr: Expression, row: Dict) -> Any:
         """在给定行上求值表达式，返回True/False（WHERE条件）"""
         if isinstance(expr, Literal):
-            # 字面量不应该单独出现在WHERE中
+            # Convert based on type hint
+            if expr.lit_type == "number":
+                try:
+                    return int(expr.value)
+                except ValueError:
+                    return float(expr.value)
+            if expr.lit_type == "null":
+                return None
             return expr.value
 
         if isinstance(expr, ColumnRef):
