@@ -42,6 +42,7 @@ class TokenType(Enum):
     DROP = auto()
     NOT = auto()
     NULL = auto()
+    GROUP = auto()
 
     # 标识符和字面量
     IDENTIFIER = auto()
@@ -88,6 +89,7 @@ KEYWORDS = {
     "DROP": TokenType.DROP,
     "NOT": TokenType.NOT,
     "NULL": TokenType.NULL,
+    "GROUP": TokenType.GROUP,
 }
 
 

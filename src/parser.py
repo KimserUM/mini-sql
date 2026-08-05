@@ -5,10 +5,14 @@ parser.py — SQL语法分析器（递归下降）
 递归下降写起来比较直观——每个语法规则一个函数。
 
 支持语法：
-  SELECT [cols] FROM table [WHERE cond] [ORDER BY col [ASC|DESC]] [LIMIT n]
+  SELECT [cols] FROM table [WHERE cond] [GROUP BY cols] [ORDER BY col [ASC|DESC]] [LIMIT n]
   INSERT INTO table (cols) VALUES (vals)
   CREATE TABLE name (col type, col type, ...)
   DELETE FROM table [WHERE cond]
+  UPDATE table SET col=val, ... [WHERE cond]
+  DROP TABLE name
+
+聚合函数: COUNT(*), COUNT(col), SUM(col), AVG(col), MAX(col), MIN(col)
 
 AST用Python dataclass表示，结构清晰一点。
 
@@ -53,12 +57,36 @@ class Literal(Expression):
     value: str
     lit_type: str    # number / string / null
 
+
+# ── SELECT列表达式 ──────────────────────────
+
+class SelectExpr:
+    """SELECT中的一列（可以是* / 列名 / 聚合函数）"""
+    pass
+
+@dataclass
+class StarExpr(SelectExpr):
+    pass
+
+@dataclass
+class ColumnExpr(SelectExpr):
+    name: str
+
+@dataclass
+class AggregateExpr(SelectExpr):
+    func: str   # COUNT, SUM, AVG, MAX, MIN
+    col: str    # 列名, '*' 表示COUNT(*)
+
+
+# ── 语句AST节点 ─────────────────────────────
+
 @dataclass
 class SelectStmt:
     """SELECT语句"""
-    columns: List[str]         # 选哪几列, ['*'] 表示全部
+    columns: List[SelectExpr]   # 选哪几列
     table: str
     where: Optional[Expression] = None
+    group_by: Optional[List[str]] = None
     order_by: Optional[str] = None
     order_dir: str = "ASC"
     limit: Optional[int] = None
@@ -89,7 +117,12 @@ class UpdateStmt:
     assignments: Dict[str, str]   # col -> new_value
     where: Optional[Expression] = None
 
-Statment = SelectStmt | InsertStmt | CreateTableStmt | DeleteStmt | UpdateStmt
+@dataclass
+class DropTableStmt:
+    """DROP TABLE语句"""
+    table: str
+
+Statment = SelectStmt | InsertStmt | CreateTableStmt | DeleteStmt | UpdateStmt | DropTableStmt
 
 
 # ── Parser ─────────────────────────────────
@@ -163,13 +196,15 @@ class Parser:
             return self._parse_delete()
         elif tok.type == TokenType.UPDATE:
             return self._parse_update()
+        elif tok.type == TokenType.DROP:
+            return self._parse_drop_table()
         else:
             raise ParseError(f"不支持的语句, 以{tok.type.name}开头", tok)
 
     # ── SELECT ────────────────────────────
 
     def _parse_select(self) -> SelectStmt:
-        """SELECT [cols] FROM table [WHERE cond] [ORDER BY...] [LIMIT n]"""
+        """SELECT [cols] FROM table [WHERE cond] [GROUP BY cols] [ORDER BY...] [LIMIT n]"""
         self._expect(TokenType.SELECT)
 
         # 列列表
@@ -184,6 +219,17 @@ class Parser:
         where = None
         if self._match(TokenType.WHERE):
             where = self._parse_expression()
+
+        # GROUP BY (可选)
+        group_by = None
+        if self._match(TokenType.GROUP):
+            self._expect(TokenType.BY)
+            group_by = []
+            col = self._expect(TokenType.IDENTIFIER)
+            group_by.append(col.value)
+            while self._match(TokenType.COMMA):
+                col = self._expect(TokenType.IDENTIFIER)
+                group_by.append(col.value)
 
         # ORDER BY (可选)
         order_by = None
@@ -208,25 +254,47 @@ class Parser:
             columns=columns,
             table=table,
             where=where,
+            group_by=group_by,
             order_by=order_by,
             order_dir=order_dir,
             limit=limit,
         )
 
-    def _parse_column_list(self) -> List[str]:
-        """列名列表: * | col1, col2, ..."""
+    def _parse_column_list(self) -> List[SelectExpr]:
+        """列名列表: * | col1, col2, ... | func(col)"""
         if self._match(TokenType.STAR):
-            return ['*']
+            return [StarExpr()]
 
-        cols = []
-        tok = self._expect(TokenType.IDENTIFIER)
-        cols.append(tok.value)
+        cols: List[SelectExpr] = []
+        cols.append(self._parse_select_expr())
 
         while self._match(TokenType.COMMA):
-            tok = self._expect(TokenType.IDENTIFIER)
-            cols.append(tok.value)
+            cols.append(self._parse_select_expr())
 
         return cols
+
+    def _parse_select_expr(self) -> SelectExpr:
+        """一个SELECT表达式: 列名 或 聚合函数(col)"""
+        tok = self._peek()
+        if tok.type != TokenType.IDENTIFIER:
+            raise ParseError("期望列名或聚合函数", tok)
+
+        name = self._advance().value
+        upper = name.upper()
+
+        # 检查是否是聚合函数调用: func(col) or func(*)
+        if upper in ("COUNT", "SUM", "AVG", "MAX", "MIN"):
+            if self._match(TokenType.LPAREN):
+                if self._match(TokenType.STAR):
+                    # COUNT(*)
+                    self._expect(TokenType.RPAREN)
+                    return AggregateExpr(func=upper, col="*")
+                else:
+                    arg = self._expect(TokenType.IDENTIFIER).value
+                    self._expect(TokenType.RPAREN)
+                    return AggregateExpr(func=upper, col=arg)
+
+        return ColumnExpr(name=name)
 
     # ── INSERT ─────────────────────────────
 
@@ -267,11 +335,11 @@ class Parser:
             return self._advance().value
         elif tok.type == TokenType.STRING:
             return self._advance().value
+        elif tok.type == TokenType.NULL:
+            self._advance()
+            return "NULL"
         elif tok.type == TokenType.IDENTIFIER:
-            val = self._advance().value
-            if val.upper() == "NULL":
-                return "NULL"
-            return val
+            return self._advance().value
         else:
             raise ParseError("期望数字或字符串", tok)
 
@@ -326,6 +394,14 @@ class Parser:
         self._match(TokenType.SEMICOLON)
 
         return DeleteStmt(table=table, where=where)
+
+    def _parse_drop_table(self) -> DropTableStmt:
+        """DROP TABLE name"""
+        self._expect(TokenType.DROP)
+        self._expect(TokenType.TABLE)
+        table = self._expect(TokenType.IDENTIFIER).value
+        self._match(TokenType.SEMICOLON)
+        return DropTableStmt(table=table)
 
     def _parse_update(self) -> UpdateStmt:
         """UPDATE table SET col=val, col=val... [WHERE cond]"""
