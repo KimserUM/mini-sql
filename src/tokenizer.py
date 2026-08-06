@@ -60,6 +60,7 @@ class TokenType(Enum):
     GE = auto()        # >=
     LE = auto()        # <=
     NE = auto()        # <>
+    LIKE = auto()      # LIKE
 
     # 其他
     SEMICOLON = auto() # ;
@@ -90,6 +91,7 @@ KEYWORDS = {
     "NOT": TokenType.NOT,
     "NULL": TokenType.NULL,
     "GROUP": TokenType.GROUP,
+    "LIKE": TokenType.LIKE,
 }
 
 

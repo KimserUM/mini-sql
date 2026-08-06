@@ -462,10 +462,11 @@ class Parser:
 
         # 比较运算符
         if tok.type in (TokenType.EQUALS, TokenType.GT, TokenType.LT,
-                        TokenType.GE, TokenType.LE, TokenType.NE):
+                        TokenType.GE, TokenType.LE, TokenType.NE,
+                        TokenType.LIKE):
             self._advance()
             right = self._parse_atom()
-            return BinaryOp(op=tok.value, left=left, right=right)
+            return BinaryOp(op=tok.value.upper(), left=left, right=right)
 
         return left
 

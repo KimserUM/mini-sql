@@ -356,6 +356,8 @@ class Engine:
                 return self._cmp(left_val, right_val) >= 0
             elif op == '<=':
                 return self._cmp(left_val, right_val) <= 0
+            elif op == 'LIKE':
+                return self._eval_like(left_val, right_val)
             elif op == 'AND':
                 return bool(left_val) and bool(right_val)
             elif op == 'OR':
@@ -386,6 +388,16 @@ class Engine:
         if val is None:
             return (1, "")
         return (0, val)
+
+    def _eval_like(self, val: Any, pattern: str) -> bool:
+        """LIKE模式匹配: % 匹配任意字符序列, _ 匹配单个字符"""
+        import re
+        if val is None:
+            return False
+        # Escape regex特殊字符, 然后转换LIKE通配符(%和_不是regex特殊字符所以safe)
+        escaped = re.escape(pattern)
+        regex = '^' + escaped.replace('%', '.*').replace('_', '.') + '$'
+        return bool(re.match(regex, str(val)))
 
     # ── 辅助 ────────────────────────────────
 
